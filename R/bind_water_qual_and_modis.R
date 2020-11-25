@@ -12,7 +12,7 @@ source(here::here("R/sfc_as_cols.R"))
 cb_wq <- read.csv(here::here("data/WaterQualityWaterQualityCBSeg2003.csv"))
 
 # load modis reflectance time series
-load(here::here("data/modis_reflectance_ts.rdata"))
+load(here::here("data/inshore_modis_reflectance_ts.rdata"))
 
 # pts <- cb_wq %>% 
 #   group_by(Station, Latitude, Longitude) %>% 
@@ -31,6 +31,8 @@ raw <- modis_reflec %>%
   sfc_as_cols(.,names = c("Longitude","Latitude")) %>%
   st_set_geometry(NULL)
 
+sus_pix <- quantile(raw$vals, .977)
+
 unique_refs <- modis_reflec %>% 
   dplyr::select(1,2) %>% 
   distinct() %>% 
@@ -43,7 +45,7 @@ cb_wq_modis <- cb_wq %>%
          Latitude = round(Latitude, 4),
          datetime = as.Date(SampleDate, format = "%m/%d/%Y")) %>% 
   filter(Parameter %in% c("TSS", "SALINITY"),
-         Depth < 4) %>%
+         Depth <= 2) %>%
   # shrink data
   dplyr::select(Station, datetime, Longitude, Latitude, Parameter, 
                 MeasureValue, SampleDate, sal_prof = CBSeg2003, Depth, SampleReplicateType, Layer) %>%
@@ -61,4 +63,14 @@ cb_wq_modis <- cb_wq %>%
   group_by(sal_prof, Station, Longitude, Latitude, datetime, vals) %>% 
   dplyr::summarise(daily_TSS = mean(TSS, na.rm = T),
                    daily_salinity = mean(SALINITY, na.rm = T)) %>% 
-  filter(!is.na(daily_TSS))
+  filter(!is.na(daily_TSS),
+         vals < sus_pix) %>% 
+  mutate(sal_regime = ifelse(str_detect(sal_prof, "PH"),"PH","MH"),
+         week = week(datetime))
+
+
+
+save(cb_wq_modis, file = here::here("data/cb_wq_modis.rdata"))
+# ggplot(inshore_cb_wq_modis) +
+#   geom_density(aes(daily_TSS)) +
+#   geom_density(data = cb_wq_modis, aes(daily_TSS), color = "blue")

@@ -1,0 +1,79 @@
+---
+output: 
+  pdf_document:
+    citation_package: natbib
+    keep_tex: true
+    fig_caption: true
+    template: svm-latex-ms.tex
+title: "Transferrability of reflectance-derived models of suspended solids between nearby estuarine environments"
+author:
+- name: Sean Hardison
+  affiliation: University of Virginia
+abstract: "Refelctance-based models of water quality are popular due to their high spatial and temporal coverage, but fall short when *in situ* validation data are sparse. However, this shortcoming may be mitigated if water quality models can be effectively generalized to systems with fewer *in situ* match-ups. To determine the transferrability of reflectance-based models of total suspended solids (TSS), we first developed five models of TSS for Chesapeake Bay using MODIS reflectance data in the 645 nm band. The best performing models were then applied to model TSS in a nearby coastal bay system along the Atlantic coast of Virginia where validation data were sparse. Results show that TSS models were effective for out of sample prediction in Chesapeake Bay, but had low transferrability to the coastal bays of Virginia. We suggest that future efforts be made to time water quality measurements in the coastal bays with satellite fly-overs in order to generate a database of reflectance validation data. Transferrability could be improved in the future if the region used to generate training samples were tailored to be more representative of the hydrodynamic environment of the coastal bays."
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+# spacing: double
+biblio-style: apsr
+header-includes:
+ \usepackage{float}
+ \usepackage{longtable}
+ \usepackage{caption}
+---
+
+```{r setup, include=FALSE, message = F, warning = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+library(tidyverse)
+library(rnaturalearthhires)
+library(sf)
+library(ggmap)
+library(raster)
+
+load(here::here("data/vcr_wq_modis.rdata"))
+vcr_pts <- vcr_wq_modis %>% 
+  st_as_sf(.,coords = c("Longitude","Latitude"), crs = 4326)
+
+
+load(here::here("data/cb_wq_modis.rdata"))
+load(here::here("data/cb_ggmap.rdata"))
+
+cb_pts <- cb_wq_modis %>% 
+  st_as_sf(.,coords = c("Longitude","Latitude"), crs = 3857) %>% 
+  dplyr::select(Station) %>% 
+  distinct() %>% 
+  st_transform(crs = 4326) %>% 
+  st_geometry()
+
+cb_poly <- st_read(here::here("data/cb_and_vcr.kml")) %>% 
+  sf::st_zm() %>% 
+  st_transform(., crs = 4326)
+```
+
+
+# Introduction
+
+# Methods
+
+## Total suspended solids data
+
+Total suspended solids data were queried from water quality databases hosted by the Chesapeake Bay Program (https://www.chesapeakebay.net/what/publications_and_data) and the Virginia Coast Reserve Long-term Ecological Research (VCR LTER; https://www.vcrlter.virginia.edu/cgi-bin/showDataset.cgi?docid=knb-lter-vcr.247) program. In both cases, water samples of pre-determined volume were filtered through paper filters, dried, and then weighed to estimate the dry weight of suspended solids in the sample. Only TSS samples collected in the upper 2 m of the water column were considered in this analysis. TSS data were collected from 59 monitoring stations in Chesapeake Bay, and from three stations in the Virginia Coast Reserve (VCR) (Fig. 1). In both cases, the queried data were limited to samples occurring on the same day as a MODIS-Terra fly-over between 2000-02-24 and 2020-07-30.  
+
+```{r cb-map1, fig.cap = "Locations of water quality-MODIS Terra match-up sites in Chesapeake Bay (orange) and in the Virginia Coast Reserve (purple).", fig.width = 6}
+ggmap(cbmap_query) +
+  ylab("Latitude") +
+  xlab("Longitude") +
+  geom_sf(data = vcr_pts, color = "black", size = 2, inherit.aes = F) +
+  geom_sf(data = cb_pts, color = "black", size = 2,  inherit.aes = F) +
+  geom_sf(data = vcr_pts, aes(color = "orange"), inherit.aes = F) +
+  geom_sf(data = cb_pts, aes(color = "purple"), inherit.aes = F) +
+  scale_color_manual(name = "Match-up sites",
+                     values = c("orange" = "orange", "purple" = "purple"),
+                     labels  = c("VCR","Chesapeake\n Bay"))
+```
+
+
+## MODIS-Terra reflectance data
+
+Match-ups between the L3 Ocean Color SMI (L3SMI) MODIS-Terra product and water quality sampling events over the period of 2000-02-24 - 2020-07-30 were identified using Google Earth Engine. The L3SMI product is available for public use with a previously applied land mask, scale factor, and offsets. 
+
