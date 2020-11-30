@@ -3,7 +3,7 @@ library(ggmap)
 library(ggplot2)
 library(leaflet)
 
-# Add FLRT data to a map of Falmouth. Note: You won't be able to use ggmap without first getting an
+# Note: You won't be able to use ggmap without first getting an
 # API key to query google
 # See https://github.com/dkahle/ggmap
 

@@ -1,25 +1,25 @@
 ---
 output: 
   pdf_document:
-    citation_package: natbib
     keep_tex: true
     fig_caption: true
     template: svm-latex-ms.tex
-title: "Transferrability of reflectance-derived models of suspended solids between nearby estuarine environments"
+title: "Incorporating spatial components into reflectance-based models of suspended solids improves predictive performance"
 author:
 - name: Sean Hardison
   affiliation: University of Virginia
-abstract: "Refelctance-based models of water quality are popular due to their high spatial and temporal coverage, but fall short when *in situ* validation data are sparse. However, this shortcoming may be mitigated if water quality models can be effectively generalized to systems with fewer *in situ* match-ups. To determine the transferrability of reflectance-based models of total suspended solids (TSS), we first developed five models of TSS for Chesapeake Bay using MODIS reflectance data in the 645 nm band. The best performing models were then applied to model TSS in a nearby coastal bay system along the Atlantic coast of Virginia where validation data were sparse. Results show that TSS models were effective for out of sample prediction in Chesapeake Bay, but had low transferrability to the coastal bays of Virginia. We suggest that future efforts be made to time water quality measurements in the coastal bays with satellite fly-overs in order to generate a database of reflectance validation data. Transferrability could be improved in the future if the region used to generate training samples were tailored to be more representative of the hydrodynamic environment of the coastal bays."
+abstract: "Reflectance-based models of water quality are popular due to the high temporal and spatial coverage provided by satellite imagery. However, such models are limited by the availability of *in situ* match-up data that can be used to groundtruth models. In cases when match-ups are sparse, regression models  may be biased by the presence of spatially autocorrelated residuals, potentially leading to misleading predictions. Here we compare the predictive performance of four different reflectance-based regression models of total suspended solids (TSS) in Chesapeake Bay. Results showed that models incorporating spatial components performed better in prediction tasks than those that did not. We next applied the best fitting models to a similar but hydrodynamically unique ecosystem to explore model transferrability, but found that the models were not effective in predicting TSS in the new ecosystem; likely due to biases in the model training procedure. Regardless, we found that incorporating spatial components into reflectance-based models of TSS can improve their predictive capacity and therefore their utility to resource managers."
 date: "`r format(Sys.time(), '%B %d, %Y')`"
 geometry: margin=1in
 fontfamily: mathpazo
 fontsize: 11pt
 # spacing: double
-biblio-style: apsr
+bibliography: ssrs_sp2020.bib
 header-includes:
  \usepackage{float}
  \usepackage{longtable}
  \usepackage{caption}
+ \usepackage{setspace}\doublespacing
 ---
 
 ```{r setup, include=FALSE, message = F, warning = F}
@@ -27,8 +27,14 @@ knitr::opts_chunk$set(echo = F, message = F, warning = F)
 library(tidyverse)
 library(rnaturalearthhires)
 library(sf)
+library(ggtext)
 library(ggmap)
+library(patchwork)
 library(raster)
+library(INLA)
+library(sdmTMB)
+library(GGally)
+library(mgcv)
 
 load(here::here("data/vcr_wq_modis.rdata"))
 vcr_pts <- vcr_wq_modis %>% 
@@ -37,6 +43,14 @@ vcr_pts <- vcr_wq_modis %>%
 
 load(here::here("data/cb_wq_modis.rdata"))
 load(here::here("data/cb_ggmap.rdata"))
+load(here::here("data/best_models.rdata"))
+load(here::here("data/model_performance.rdata"))
+
+predz <- tibble(gam_pred,
+                grf_pred,
+                reg_pred,
+                glm_pred,
+                tss_test = tss_test$daily_TSS)
 
 cb_pts <- cb_wq_modis %>% 
   st_as_sf(.,coords = c("Longitude","Latitude"), crs = 3857) %>% 
@@ -45,21 +59,41 @@ cb_pts <- cb_wq_modis %>%
   st_transform(crs = 4326) %>% 
   st_geometry()
 
-cb_poly <- st_read(here::here("data/cb_and_vcr.kml")) %>% 
+cb_poly <- st_read(here::here("data/cb_mesh_poly.kml")) %>% 
+  sf::st_zm() %>% 
+  st_transform(., crs = 4326) %>% 
+  as_Spatial() 
+
+cb_mainstem <- st_read(here::here("data/mainstem_cb.kml")) %>% 
   sf::st_zm() %>% 
   st_transform(., crs = 4326)
+
+coast <- ecodata::coast %>% 
+  st_transform(., crs = 4326) %>% 
+  st_crop(cb_mainstem) %>% 
+  st_geometry()
+
+
 ```
 
-
+\linespread{1.25}
 # Introduction
+
+The use of regression models to relate remotely sensed surface reflectance to water quality parameters is a popular method of environmental monitoring worldwide [@park2014; @ouma2020; @matus2018]. These models are often derived opportunistically from match-ups between water quality sampling and satellite fly-overs [e.g. @luis2019], which may be limiting in areas where water quality measurements are difficult to frequently ascertain. In such cases, water quality observations may be clustered in space or time, and the use of such measurements in reflectance-based regression models may introduce autocorrelated errors. While such a model may have high explanatory power, its ability to predict over new data, and therefore its utility to resource managers, will likely be hampered due to the presence of biased estimates.
+
+The presence of spatial autocorrelation in environmental data is so common that is has been enshrined in Tobler's First Law of Geography: "everything is related to everything else, but near things are more related than distant things" [@tobler1970; @miller2004]. It follows that metrics of water quality are also autocorrelated; for example, the concentration of total suspended solids (TSS) in the water column will be more similar to TSS concentration at a site nearby than at a site further away. This is most clearly evidenced by the formation of sediment plumes flowing into estuaries after large storm events, such as the large plume that traveled southwards into Chesapeake Bay from the Susquehanna River following Tropical Storm Lee in 2011 [@hirsch2012]. The plume created a spatial dependence structure in suspended sediment concentrations along a North-South gradient as it flowed into the Bay: sediment concentrations would have been highly correlated with one another in the center of the plume and the correlation would have degraded with distance outwards. 
+
+On a less extreme scale, there are several physical mechanisms to consider that contribute to TSS loading in Chesapeake Bay and its surrounding estuaries. TSS concentrations are generally highest within the tributaries of Chesapeake Bay [@son2012]. Sediments can be mobilized by rain events or development upstream in a surrounding tributary, subsequently leading to deposition of the larger sediment size fractions near river mouths. Smaller diameter sediment fractions will flow into the mainstem of the Bay, but in lower concentrations. In nearby coastal estuaries, such as the coastal bays of Virginia, the hydrodynamic environment is more influenced by waves, tides, and vegetation than by riverine inflow [@nardin2020]. These environmental drivers contribute to spatial autocorrelation of suspended sediments, and more broadly TSS, on small to regional scales that could potentially lead to biased predictions if reflectance-based regression models are developed using sparse validation data.
+
+In this paper, we compare the predictive performance of four reflectance-based regression models of TSS in Chesapeake Bay. We hypothesized that the inclusion of spatial information in regression models would improve predictions on out-of-sample test data. We also tested the transferrability of the best fitting models by applying them to TSS data collected in the Virginia Coast Reserve along the Atlantic coast of Virginia.  
 
 # Methods
 
 ## Total suspended solids data
 
-Total suspended solids data were queried from water quality databases hosted by the Chesapeake Bay Program (https://www.chesapeakebay.net/what/publications_and_data) and the Virginia Coast Reserve Long-term Ecological Research (VCR LTER; https://www.vcrlter.virginia.edu/cgi-bin/showDataset.cgi?docid=knb-lter-vcr.247) program. In both cases, water samples of pre-determined volume were filtered through paper filters, dried, and then weighed to estimate the dry weight of suspended solids in the sample. Only TSS samples collected in the upper 2 m of the water column were considered in this analysis. TSS data were collected from 59 monitoring stations in Chesapeake Bay, and from three stations in the Virginia Coast Reserve (VCR) (Fig. 1). In both cases, the queried data were limited to samples occurring on the same day as a MODIS-Terra fly-over between 2000-02-24 and 2020-07-30.  
+Total suspended solids (TSS) data were queried from water quality databases hosted by the Chesapeake Bay Program (https://www.chesapeakebay.net/what/publications_and_data) and the Virginia Coast Reserve Long-term Ecological Research program (VCR LTER; https://www.vcrlter.virginia.edu/cgi-bin/showDataset.cgi?docid=knb-lter-vcr.247). In both cases, water samples of pre-determined volume were filtered through paper filters, dried, and then weighed to estimate the dry weight of suspended solids in the sample. Only TSS samples collected in the upper 2 m of the water column were considered in this analysis. TSS data were collected from 59 monitoring stations in Chesapeake Bay, and from six stations in the Virginia Coast Reserve (VCR) (Fig. 1). In Chesapeake Bay, the queried data were limited to samples occurring on the same day as a MODIS-Terra fly-over between 2000-02-24 and 2020-07-30. However, there were only 16 same-day water quality-MODIS match-ups over the study period in the VCR, so we counted a match-up as a MODIS flyover within one day of water quality sampling. This increased our sample size to 48 match-ups in the VCR.  
 
-```{r cb-map1, fig.cap = "Locations of water quality-MODIS Terra match-up sites in Chesapeake Bay (orange) and in the Virginia Coast Reserve (purple).", fig.width = 6}
+```{r cb-map1, fig.cap = "Locations of water quality-MODIS Terra match-up sites in Chesapeake Bay (purple) and in the Virginia Coast Reserve (orange).", fig.width = 6}
 ggmap(cbmap_query) +
   ylab("Latitude") +
   xlab("Longitude") +
@@ -75,5 +109,233 @@ ggmap(cbmap_query) +
 
 ## MODIS-Terra reflectance data
 
-Match-ups between the L3 Ocean Color SMI (L3SMI) MODIS-Terra product and water quality sampling events over the period of 2000-02-24 - 2020-07-30 were identified using Google Earth Engine. The L3SMI product is available for public use with a previously applied land mask, scale factor, and offsets. 
+Match-ups between the L3 Ocean Color SMI (L3SMI) 500 m resolution MODIS-Terra product and water quality sampling events over the period of 2000-02-24 - 2020-07-30 were identified using Google Earth Engine. The L3SMI product is available for public use with a previously applied land mask, scale factor, and offsets. We used surface reflectance from the 645 nm band for regression analyses, as this band has been successfully used for similar applications in riverine environments [@park2014]. We identified 451 unique images that included one or more pixel match-up with water quality sampling events in Chesapeake Bay, yielding 1761 matches in total. In the VCR, we identified 27 unique images that matched water quality sampling events within a day, yielding 48 observations in total.
 
+## Model building
+
+We developed four models of varying complexity to predict TSS from reflectance data. The first model was a linear regression model of the form 
+
+$$TSS_{i} = \alpha + \beta_{1}\times Rrs_i + \epsilon_{i},$$
+where $TSS_i$ is a unique TSS indexed by the combination of date and site ($i$), $\alpha$ is the model intercept, $\beta_{1}$ is the slope, $Rrs_{i}$ is the remote sensing reflectance, and $\epsilon_{i}$ is an error term assumed to be normally distributed with mean 0 and variance $\sigma^2$. 
+
+The second model was a generalized linear model (GLM) with a log-link assuming $TSS_i$ to be gamma distributed, but was otherwise identical in covariates to the simpler regression model. We chose to model $TSS$ as gamma distributed because the gamma GLM minimized deviations from expected residual patterns in model diagnostics. The GLM was given by 
+$$\log ({ E(TSS_{i}) })  = \alpha + \beta_{1}\times Rrs_i.$$
+The gamma distribution was appropriate in this case because it is specifically used to model continuous data that are greater than 0. Given the expected value $E(TSS_i) = \mu$, the distribution variance is $\frac{\mu^2}{v}$, where $v$ is a dispersion parameter [@zuur2009]. We fitted GLMs in R using the *MASS* package [@venables2002]. 
+
+The third model we tested was a generalized additive model (GAM) with an identity link, which allowed for non-linearity in the model of $TSS$. We also included a second covariate in this model to explicitly account for spatial variability along latitudinal and longitudinal environmental gradients in Chesapeake Bay TSS; represented by the interaction of water quality sampling site latitude and longitude. The model was  
+ 
+$$E(TSS_{i}) = \beta_0 + f_1(Rrs_{i}) + f_{2}(lon_{i}, lat_{i}),$$
+where $f_{1}$ is a smooth function of remote sensing reflectance, and $f_{2}$ is the tensor product of longitude and latitude at site and day $i$ [@pedersen2019]. GAMs were fitted using the R package *mgcv* [@wood2011].
+
+The final model was a spatial generalized linear mixed effects model (GLMM) with an identity link. Similarly to the GAM, this model explicitly accounted for the effect of space on TSS, but did so by modeling space as a random effect using Gaussian random fields (GRFs). This type of model, which is also known as a predictive process model, has been shown to have a predictive edge when compared to regression models with spatial trend components (e.g. the GAM described above) [@latimer2009]. By explicitly modeling spatial autocorrelation, predictive process models can also generate reasonable predictions over unmeasured space using methods similar to kriging. 
+
+The model is a two-stage hierarchical model, where the first stage relates $TSS$ to $Rrs$ and a spatial component representing a vector of spatially correlated errors, $W$. Modeling $W$ at each location $n$ is computationally expensive, and so the second stage of the model involves specifying a spatial process across a reduced domain given by $m$ knots (Fig. 2). The spatial process estimated at $m$ knots, $W*$, is given by a multivariate normal distribution
+
+$$W^* \sim MVN(0, \Sigma^*),$$
+where $\Sigma^*$ is a covariance matrix describing the isotropic spatial association between knots (i.e. the association varies only with distance, not direction). The spatial random effects at each water quality sampling location ($W$) can then be estimated from the reduced representation $W^*$ using a method similar to kriging [@latimer2009; @anderson2019]. The full model is given by 
+
+$$E(TSS_{i}) = \beta_0 + \beta_{1}\times Rrs_{i} + w_{i},$$
+where $w_{i}$ is an element in the vector $W$ describing a spatial random effect for site and date $i$. We fitted spatial GLMMs using the *sdmTMB* and *INLA* R packages [@rue2009; @anderson2020; @rcite]. All code used in this analysis is available at https://github.com/seanhardison1/ssrs.
+
+```{r inla-mesh, fig.cap = "The reduced spatial domain over which the spatial process $W^*$ is modeled. Each intersection of the mesh within the blue polygon represents a knot.", fig.width = 4, fig.height = 6,out.extra='trim={0 2.25cm 0 2.25cm},clip', fig.align = 'center'}
+cb_mesh_seg <- inla.sp2segment(cb_poly)
+cb_mesh <- inla.mesh.2d(boundary=cb_mesh_seg, cutoff=0.01,
+                         max.edge=c(0.1, 0.3))
+plot(cb_mesh, main = "")
+```
+
+## Model evaluation
+
+Model performances were evaluated by cross validation, in which the the full TSS-Rrs data set was randomly subsetted into training and testing sets containing 80% and 20% of the original data respectively. Each model was fitted using the training set and then applied to the test set. Prediction performance on the test set was measured using root mean square error (RMSE). This procedure was performed 10 times on 10 unique data subsets to explore the performance of each model. The best two models, which minimized RMSE across the cross validation exercises, were then applied to the VCR TSS-Rrs data set to evaluate model transferrability. 
+
+# Results
+
+Our analysis revealed that accounting for spatial processes in reflectance-based models of TSS improves the performance of out-of-sample prediction (Fig. 3). There was an ~5.8% decrease in prediction error between the best-performing GAM and worst performing GLM model, whereas the difference in mean RMSE between the GAM and spatial GLMM was only ~0.3%. The simple linear model performed better than the gamma distributed GLM, with a ~3.9% decrease in prediction error between the two models. While out-of-sample performance was high across models, the best performing models performed poorly when transferred to the VCR ecosystem (Fig. 4). Model predictions in the VCR largely underestimated TSS from water quality sampling.
+
+```{r cross-val, fig.cap = "Results from cross-validation of reflectance-based models of TSS showing mean prediction error in terms of RMSE by model. Bars show bootstrapped 95% confidence intervals for the sample mean.", fig.width=5, fig.height = 4}
+
+# performance %>% 
+#   dplyr::rename(`Spatial GLMM` = 1,
+#                 `GAM` = 2,
+#                 `Linear Regression` = 3,
+#                 `GLM` = 4) %>% 
+#   dplyr::select(-5) %>% 
+#   summarise_all(mean)
+
+performance %>% 
+  dplyr::rename(`Spatial GLMM` = 1,
+                `GAM` = 2,
+                `Linear Regression` = 3,
+                `GLM` = 4) %>% 
+  dplyr::select(-5) %>% 
+  gather(Var, Value) %>%
+  mutate(Var = factor(Var, levels = c("GAM", "Spatial GLMM", "Linear Regression", "GLM"))) %>% 
+  group_by(Var) %>% 
+  summarise(mean = Hmisc::smean.cl.boot(Value,conf.int=.95, 
+                                               B=1000, na.rm=TRUE, reps=FALSE)[1],
+            ci_low = Hmisc::smean.cl.boot(Value,conf.int=.95, 
+                                               B=1000, na.rm=TRUE, reps=FALSE)[2],
+            ci_high = Hmisc::smean.cl.boot(Value,conf.int=.95, 
+                                               B=1000, na.rm=TRUE, reps=FALSE)[3]) %>% 
+  ggplot() + 
+    geom_point(aes(x = Var, y = mean, group = Var)) +
+    geom_errorbar(aes(x = Var, ymax  = ci_high, ymin = ci_low, group = Var), 
+                  width = 0.2) +
+    labs(y = "RMSE") +
+    theme_minimal() +
+    theme(axis.title.x = element_blank()) 
+```
+
+```{r oot-perf, fig.cap = "Model prediction performance on an out-of-system test set in the VCR (top row) and an out-of-sample test set in the Chesapeake Bay (bottom row). The orange lines are linear regressions to show deviation from the 1:1 line, shown in black.", fig.width=6, fig.height = 7}
+# Using the spatial GLMM and GAM to predict for the VCR
+vcr_pred_df <- predict(grf_mod, newdata = vcr_wq_modis) %>% 
+  mutate(vcr_gam = predict(gam_mod, 
+                           newdata = vcr_wq_modis, type = "response")) %>% 
+  dplyr::select(daily_TSS, vcr_gam, vcr_grf = est) 
+
+plt_func <- function(df, col1, col2, ylab = F, title, lab_df_y = 127,
+                     lab_df_x  = 5){
+  df <- df %>% dplyr::select(col1, col2)
+  
+  rmse <- round(sqrt(mean((df[[col1]] - df[[col2]])^2)),3)
+  pred_cor <- round(cor(df[[col1]], df[[col2]]),3)
+  
+  lab_df <- tibble(labs = c(paste("RMSE =",
+                                  rmse,"<br>R<sup>2</sup> =",pred_cor)),
+                   x = lab_df_x,
+                   y = lab_df_y)
+  
+  p <- ggplot(df) +
+    geom_point(aes_string(x = col1, y = col2)) +
+    geom_smooth(aes_string(x = col1, y = col2),
+                color = "darkorange", method = "lm") +
+    geom_abline(intercept = 0, slope = 1) +
+    geom_richtext(data = lab_df, aes(x = x,
+                                 y = y,
+                                 label = labs),
+                  fill = NA, label.color = NA) +
+    labs(title = title,
+         x = "Predicted TSS (mg/L)") +
+    theme_minimal()
+  if (ylab){
+    p + labs(y = "TSS (mg/L)")
+  } else {
+    p + theme(axis.title.y = element_blank(),
+              axis.ticks.y = element_blank())
+  }
+}
+
+p1 <- plt_func(df = vcr_pred_df,
+               col1 = "vcr_grf",
+               col2 = "daily_TSS",title = "VCR - Spatial GLMM", ylab = T,
+               lab_df_y = 190,
+               lab_df_x = 7)
+
+p2 <- plt_func(df = vcr_pred_df,
+               col1 = "vcr_gam",
+               col2 = "daily_TSS",title = "VCR - GAM", ylab = F,
+               lab_df_y = 190,
+               lab_df_x = 7)
+
+p3 <- plt_func(df = predz,
+               col1 = "grf_pred",
+               col2 = "tss_test",title = "CB - Spatial GLMM", ylab = T,
+               lab_df_y = 22,
+               lab_df_x = 14)
+p4 <- plt_func(df = predz,
+               col1 = "gam_pred",
+               col2 = "tss_test",title = "CB - GAM", ylab = F,
+               lab_df_y = 22,
+               lab_df_x = 14)
+
+
+p1 + p2 + p3 + p4 +  plot_layout(nrow = 2,ncol =2)
+```
+
+To further compare outputs from the spatial GLMM and GAM, we used the two models to predict TSS over the Chesapeake Bay spatial domain from a single MODIS image on June 5th, 2010 (Fig. 5). Comparing the two predictions illustrates how the models treat their respective spatial components. Qualitatively, the GAM appears to put more weight on the longitudinal gradient in TSS than the spatial GLMM, and predicts higher TSS in Tangier and Pocomoke Sounds than the spatial GLMM. The spatial GLMM indicates that there are certain "hotspots" of TSS for this day in June, but suggests there is less evidence for a TSS longitudinal gradient. Investigating the spatial random effects from the model prediction (Fig. 6) suggests that the hotspots identified in Figure 4 are poorly estimated by reflectance in the 645 nm band.
+
+```{r spat-pred, fig.cap = "Spatial GLMM and GAM Predictions of TSS over space from a single MODIS image taken on June 5th, 2010. Gaps in image pixels are due to masking."}
+
+plot_map_raster <- function(dat, column = "est", limits = c(0,19.82)) {
+  ggplot(dat, aes_string("Longitude", "Latitude", fill = column)) +
+    geom_tile() +
+    coord_fixed() +
+    scale_fill_viridis_c(limits = limits)
+}
+
+grf_map <- 
+  plot_map_raster(spatial_pred, "est") +
+  geom_sf(data = coast, inherit.aes = F) +
+  coord_sf(xlim = c(-77.3, -75.6),
+           ylim = c(36.8, 39.2)) +
+  labs(fill = "Predicted TSS\n (mg/L)",
+       title = "Spatial GLMM") +
+  ecodata::theme_map()
+
+gam_map <- 
+  plot_map_raster(spatial_pred, "gam_pred") +
+  geom_sf(data = coast, inherit.aes = F) +
+  coord_sf(xlim = c(-77.3, -75.6),
+           ylim = c(36.8, 39.2)) +
+  labs(fill = "Predicted TSS\n (mg/L)",
+       title = "GAM") +
+  ecodata::theme_map() +
+  theme(axis.title.y = element_blank())
+
+# lm_map <- 
+#   plot_map_raster(spatial_pred, "lm_pred") +
+#   geom_sf(data = coast, inherit.aes = F) +
+#   coord_sf(xlim = c(-77.3, -75.6),
+#            ylim = c(36.8, 39.2)) +
+#   labs(fill = "Predicted TSS\n (mg/L)",
+#        title = "Linear model") +
+#   ecodata::theme_map() +
+#   theme(axis.title.y = element_blank())
+
+
+grf_map + gam_map + plot_layout(nrow = 1, guides = "collect") 
+```
+
+```{r, fig.cap = "The breakdown of fixed and random effects from the spatial GLMM prediction in Fig. 5. The fixed effects describe the relationship between reflectance and TSS, whereas the random effects represent deviations in TSS that are not captured by reflectance. The sum of these two figures yields the estimate shown in Fig. 5.",fig.width=6, fig.height = 7}
+ran_efs <- 
+  plot_map_raster(spatial_pred, "omega_s", limits = c(-2.2,9.5)) +
+  geom_sf(data = coast, inherit.aes = F) +
+  coord_sf(xlim = c(-77.3, -75.6),
+           ylim = c(36.8, 39.2)) +
+  labs(fill = "Predicted RE TSS\n (mg/L)",
+       title = "Random effects only") +
+  ecodata::theme_map() +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 7))
+
+fixed_efs <- 
+  plot_map_raster(spatial_pred, "est_non_rf", limits = c(6.4,14.2)) +
+  geom_sf(data = coast, inherit.aes = F) +
+  coord_sf(xlim = c(-77.3, -75.6),
+           ylim = c(36.8, 39.2)) +
+  labs(fill = "Predicted FE TSS\n (mg/L)",
+       title = "Fixed effects only") +
+  ecodata::theme_map() +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 7))
+
+ran_efs + fixed_efs + plot_layout(nrow = 1)
+```
+
+# Discussion
+
+The model comparisons described above show that simply including spatial information in reflectance-based models of TSS can improve the models' predictive performance. This may be especially useful when models are developed retrospectively with sparse validation data or water quality samples are not well-aligned with satellite fly-overs. Further, geostatistical methods improve on common reflectance-based modeling techniques like non-linear [@park2014; @ouma2020] or multiple regression [@matus2018] by addressing biases introduced by spatial autocorrelation in model residuals. In such cases, estimates generated by these regression techniques may be biased; especially when there are few match-ups [@hardison2019]. Another benefit of using geostatistical methods for reflectance-based water quality monitoring is their relative simplicity compared to machine learning approaches like neural networks, allowing for greater interpretability and more effective communication of results.
+
+We suspect that there are several reasons why the transferrability of the spatial GLMM and GAM between the Chesapeake Bay and VCR was low. For one, the TSS load in the VCR was much higher than the Chesapeake Bay. The median TSS concentration in the Chesapeake Bay was 6.28 mg/L, whereas the median TSS concentration in the VCR was 29.2 mg/L. The models had not been exposed to such high TSS concentrations during the training phase, and as a consequence were not able to generate accurate predictions for these high TSS concentrations. Also, the hydrodynamic environment from which the training data were drawn was far removed from that of the VCR. The coastal bays of Virginia are largely shallow (mean depths between -1 m - -2 m NADV88) [@orth2012] with relatively little freshwater inflow compared to the Chesapeake Bay. This could explain the higher suspended solid load in the VCR, where shallower benthic sediments are susceptible to resuspension due to wave and tidal action [@nardin2020]. We also broadened the definition of a "match-up" in the VCR by including images taken within a day of water quality sampling. However, while this step increased our sample size, refitting the model with same-day match-ups showed that it did not worsen the transferrability of the model. 
+
+Even though our training set was large, prediction error from the non-spatial regression models was still biased by the presence of autocorrelated error. This effect may be even more pronounced in smaller data sets, highlighting the importance of modeling space explicitly. Model transferrability could be improved in the future if match-up sites from Chesapeake Bay were limited to shallower nearshore areas that are more representative of the coastal bays of the VCR. Future water quality monitoring efforts should also time sampling to coincide with satellite fly-overs to minimize discrepancies. 
+
+Here we showed that out-of-sample predictions from models incorporating the 645 nm MODIS-Terra surface reflectance band could be improved if information about the location of *in situ* match-up were considered explicitly. This improvement is likely to be larger for smaller data sets with larger magnitudes of spatial autocorrelation, but this warrants further study. We also found that transferrability of these models to new systems was poor, but that there are likely several avenues for improving model performance in new ecosystems.
+
+```{r, eval = F}
+median(cb_wq_modis$daily_TSS)
+median(vcr_wq_modis$daily_TSS)
+```
+
+\newpage
+## References

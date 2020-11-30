@@ -3,13 +3,13 @@ library(anytime)
 library(magrittr)
 library(tidyverse)
 
-g1 <- xmlParse(file = here::here("data/inshore_modis_rrs_645_2000_2010.kml"))
-g2 <- xmlParse(file = here::here("data/inshore_modis_rrs_645_2010_2020.kml"))
+g1 <- xmlParse(file = here::here("data/ffs_modis_rrs_645_2000_2010.kml"))
+g2 <- xmlParse(file = here::here("data/ffs_modis_rrs_645_2010_2020.kml"))
 xml_data_1 <- xmlToList(g1) 
 xml_data_2 <- xmlToList(g2) 
 
 # parsing XML
-inshore_modis_reflec <- NULL
+ffs_modis_reflec <- NULL
 for (j in c(1,2)){
   message(j)
   xml_data <- get(paste0("xml_data_",j))
@@ -33,12 +33,12 @@ for (j in c(1,2)){
       mutate(vals = vals,
              datetime = dt)
     
-    assign("inshore_modis_reflec", rbind(inshore_modis_reflec, img_df))
+    assign("ffs_modis_reflec", rbind(ffs_modis_reflec, img_df))
   }
 }
 
 
-save(inshore_modis_reflec, file = here::here("data/inshore_modis_reflectance_ts.rdata"))
+save(ffs_modis_reflec, file = here::here("data/ffs_modis_reflectance_ts.rdata"))
 
 vcr1 <- xmlParse(file = here::here("data/vcr_modis_rrs_645_2000_2020.kml"))
 xml_data <- xmlToList(vcr1) 
